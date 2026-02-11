@@ -29,6 +29,7 @@ export function CaseDetailPage() {
     return 'case';
   }, [location.pathname]);
 
+  const [mode, setMode] = useState<DetailMode>(null);
   const [caseData, setCaseData] = useState<Case | null>(null);
   const [resourceData, setResourceData] = useState<Resource | null>(null);
   const [resourcePreview, setResourcePreview] = useState<{ type: string; url?: string; content?: any } | null>(null);
