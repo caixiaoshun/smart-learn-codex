@@ -17,7 +17,6 @@ import { StudentAnalyticsPage } from '@/pages/student/StudentAnalyticsPage';
 import { CourseDetailPage } from '@/pages/student/CourseDetailPage';
 import { CaseLibraryPage } from '@/pages/student/CaseLibraryPage';
 import { CaseDetailPage } from '@/pages/student/CaseDetailPage';
-import { ResourceDetailPage } from '@/pages/student/ResourceDetailPage';
 import { PeerReviewPage } from '@/pages/student/PeerReviewPage';
 import { TeacherDashboard } from '@/pages/teacher/TeacherDashboard';
 import { ClassManagementPage } from '@/pages/teacher/ClassManagementPage';
@@ -85,7 +84,6 @@ function App() {
           <Route path="/dashboard" element={<DashboardRedirect />} />
           <Route path="/homeworks" element={<StudentHomeworkPage />} />
           <Route path="/resources" element={<ResourceLibraryPage />} />
-          <Route path="/resources/:id" element={<ResourceDetailPage />} />
           <Route path="/ai-assistant" element={<AIAssistantPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/student/analytics" element={<StudentAnalyticsPage />} />
@@ -108,7 +106,6 @@ function App() {
           <Route path="/teacher/homeworks" element={<HomeworkManagementPage />} />
           <Route path="/teacher/analytics" element={<AnalyticsPage />} />
           <Route path="/teacher/resources" element={<ResourceLibraryPage />} />
-          <Route path="/teacher/resources/:id" element={<ResourceDetailPage />} />
           <Route path="/teacher/settings" element={<SettingsPage />} />
           <Route path="/teacher/behavior" element={<BehaviorAnalysisPage />} />
           <Route path="/teacher/intervention" element={<InterventionConsolePage />} />
