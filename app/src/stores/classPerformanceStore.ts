@@ -21,11 +21,18 @@ function triggerBlobDownload(blob: Blob, filename: string) {
   document.body.removeChild(a);
 }
 
+interface ScoringRules {
+  maxScore: number;
+  qaWeight: number;
+  shareWeight: number;
+}
+
 interface ClassPerformanceState {
   records: ClassPerformanceRecord[];
   summary: PerformanceSummary[];
   knowledgePoints: KnowledgePoint[];
   knowledgeDistribution: KnowledgeDistribution[];
+  scoringRules: ScoringRules;
   isLoading: boolean;
 
   // 记录管理
@@ -47,6 +54,10 @@ interface ClassPerformanceState {
   fetchSummary: (classId: string) => Promise<void>;
   exportRecords: (classId: string, format: 'csv' | 'json') => Promise<void>;
 
+  // 评分规则
+  fetchScoringRules: (classId: string) => Promise<void>;
+  updateScoringRules: (classId: string, rules: ScoringRules) => Promise<void>;
+
   // 知识点
   publishKnowledgePoints: (classId: string, points: { title: string; description?: string }[]) => Promise<void>;
   fetchKnowledgePoints: (classId: string) => Promise<void>;
@@ -60,6 +71,7 @@ export const useClassPerformanceStore = create<ClassPerformanceState>((set, get)
   summary: [],
   knowledgePoints: [],
   knowledgeDistribution: [],
+  scoringRules: { maxScore: 5, qaWeight: 0.5, shareWeight: 0.5 },
   isLoading: false,
 
   createRecord: async (data) => {
@@ -105,6 +117,16 @@ export const useClassPerformanceStore = create<ClassPerformanceState>((set, get)
       triggerBlobDownload(blob, '平时表现.json');
     }
     toast.success('导出成功');
+  },
+
+  fetchScoringRules: async (classId) => {
+    const { data } = await api.get(`/class-performance/scoring-rules/${classId}`);
+    set({ scoringRules: data.rules });
+  },
+
+  updateScoringRules: async (classId, rules) => {
+    const { data } = await api.put(`/class-performance/scoring-rules/${classId}`, rules);
+    set({ scoringRules: data.rules });
   },
 
   publishKnowledgePoints: async (classId, points) => {

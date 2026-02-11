@@ -28,12 +28,15 @@ export function ClassPerformancePage() {
     summary,
     knowledgePoints,
     knowledgeDistribution,
+    scoringRules,
     isLoading,
     createRecord,
     fetchRecords,
     deleteRecord,
     fetchSummary,
     exportRecords,
+    fetchScoringRules,
+    updateScoringRules,
     publishKnowledgePoints,
     fetchKnowledgePoints,
     fetchKnowledgeDistribution,
@@ -53,6 +56,11 @@ export function ClassPerformancePage() {
   const [isKpOpen, setIsKpOpen] = useState(false);
   const [kpItems, setKpItems] = useState([{ title: '', description: '' }]);
 
+  const [isRuleDialogOpen, setIsRuleDialogOpen] = useState(false);
+  const [ruleMaxScore, setRuleMaxScore] = useState('5');
+  const [ruleQaWeight, setRuleQaWeight] = useState('50');
+  const [ruleShareWeight, setRuleShareWeight] = useState('50');
+
   useEffect(() => {
     fetchTeacherClasses();
   }, []);
@@ -68,6 +76,7 @@ export function ClassPerformancePage() {
       fetchSummary(classId),
       fetchKnowledgePoints(classId),
       fetchKnowledgeDistribution(classId),
+      fetchScoringRules(classId).catch(() => { /* use defaults if fetch fails */ }),
     ]);
     const { data } = await api.get(`/class-performance/knowledge-radar/${classId}`);
     setRadarData(data.radar || []);
@@ -120,6 +129,35 @@ export function ClassPerformancePage() {
     await loadClassData(selectedClassId);
   };
 
+  const handleOpenRuleDialog = () => {
+    setRuleMaxScore(String(scoringRules.maxScore));
+    setRuleQaWeight(String(Math.round(scoringRules.qaWeight * 100)));
+    setRuleShareWeight(String(Math.round(scoringRules.shareWeight * 100)));
+    setIsRuleDialogOpen(true);
+  };
+
+  const handleSaveRules = async () => {
+    if (!selectedClassId) return;
+    const qaW = Number(ruleQaWeight) / 100;
+    const shareW = Number(ruleShareWeight) / 100;
+    if (Math.abs(qaW + shareW - 1) > 0.01) {
+      toast.error('课堂问答权重与知识分享权重之和必须等于 100%');
+      return;
+    }
+    try {
+      await updateScoringRules(selectedClassId, {
+        maxScore: Number(ruleMaxScore),
+        qaWeight: qaW,
+        shareWeight: shareW,
+      });
+      toast.success('评分规则已更新');
+      setIsRuleDialogOpen(false);
+      await fetchSummary(selectedClassId);
+    } catch {
+      toast.error('更新评分规则失败');
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -128,7 +166,7 @@ export function ClassPerformancePage() {
           <p className="mt-1 text-sm text-muted-foreground">记录课堂互动、知识分享与知识点掌握度。</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={() => toast.success('评分规则已保存并生效')}>评分规则设置</Button>
+          <Button variant="outline" onClick={handleOpenRuleDialog}>评分规则设置</Button>
           {selectedClassId && <Button onClick={() => exportRecords(selectedClassId, 'csv')}><Download className="mr-2 h-4 w-4" />一键导出到成绩册</Button>}
         </div>
       </div>
@@ -148,9 +186,9 @@ export function ClassPerformancePage() {
       {selectedClassId && (
         <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'records' | 'summary' | 'knowledge')}>
           <TabsList>
-            <TabsTrigger value="records">records</TabsTrigger>
-            <TabsTrigger value="summary">summary</TabsTrigger>
-            <TabsTrigger value="knowledge">knowledge</TabsTrigger>
+            <TabsTrigger value="records">记录</TabsTrigger>
+            <TabsTrigger value="summary">汇总</TabsTrigger>
+            <TabsTrigger value="knowledge">知识点</TabsTrigger>
           </TabsList>
 
           <TabsContent value="records" className="space-y-4">
@@ -260,6 +298,34 @@ export function ClassPerformancePage() {
               {kpItems.length > 1 && <Button variant="outline" onClick={() => setKpItems((prev) => prev.slice(0, -1))}>删除最后一条</Button>}
             </div>
             <Button onClick={handlePublishKnowledgePoints}>发布</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isRuleDialogOpen} onOpenChange={setIsRuleDialogOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>评分规则设置</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <label className="text-sm font-medium">单次评分满分</label>
+              <Input type="number" min={1} max={100} value={ruleMaxScore} onChange={(e) => setRuleMaxScore(e.target.value)} />
+            </div>
+            <div>
+              <label className="text-sm font-medium">课堂问答权重（%）</label>
+              <Input type="number" min={0} max={100} value={ruleQaWeight} onChange={(e) => {
+                setRuleQaWeight(e.target.value);
+                setRuleShareWeight(String(100 - Number(e.target.value)));
+              }} />
+            </div>
+            <div>
+              <label className="text-sm font-medium">知识分享权重（%）</label>
+              <Input type="number" min={0} max={100} value={ruleShareWeight} onChange={(e) => {
+                setRuleShareWeight(e.target.value);
+                setRuleQaWeight(String(100 - Number(e.target.value)));
+              }} />
+            </div>
+            <p className="text-xs text-muted-foreground">课堂问答与知识分享权重之和需等于 100%。</p>
+            <Button onClick={handleSaveRules}>保存规则</Button>
           </div>
         </DialogContent>
       </Dialog>

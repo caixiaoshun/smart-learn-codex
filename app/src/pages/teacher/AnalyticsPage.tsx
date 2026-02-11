@@ -100,13 +100,13 @@ export function AnalyticsPage() {
 
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
-          <CardHeader><CardTitle>homeworkStats（作业提交率）</CardTitle></CardHeader>
+          <CardHeader><CardTitle>作业提交率</CardTitle></CardHeader>
           <CardContent className="h-80">
             <BaseBarChart data={homeworkStats.map((h) => ({ name: h.title.slice(0, 8), value: h.statistics.submissionRate }))} />
           </CardContent>
         </Card>
         <Card>
-          <CardHeader><CardTitle>scoreDistribution（成绩分布）</CardTitle></CardHeader>
+          <CardHeader><CardTitle>成绩分布</CardTitle></CardHeader>
           <CardContent className="h-80">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -121,7 +121,7 @@ export function AnalyticsPage() {
       </div>
 
       <Card>
-        <CardHeader><CardTitle>classOverview（班级概览）</CardTitle></CardHeader>
+        <CardHeader><CardTitle>班级概览</CardTitle></CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
           <div>
             <p className="mb-2 font-medium">高分学生</p>
