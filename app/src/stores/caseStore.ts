@@ -42,6 +42,7 @@ interface CaseState {
   bookmarkCase: (caseId: string) => Promise<void>;
   unbookmarkCase: (caseId: string) => Promise<void>;
   checkBookmark: (caseId: string) => Promise<boolean>;
+  fetchMyBookmarkIds: () => Promise<string[]>;
   rateCase: (caseId: string, rating: number) => Promise<void>;
   fetchComments: (caseId: string) => Promise<{ id: string; userId: string; username: string; avatar?: string; role?: string; content: string; createdAt: string }[]>;
   addComment: (caseId: string, content: string) => Promise<{ id: string; userId: string; username: string; avatar?: string; role?: string; content: string; createdAt: string }>;
@@ -131,6 +132,15 @@ export const useCaseStore = create<CaseState>((set) => ({
       return data.isBookmarked;
     } catch {
       return false;
+    }
+  },
+
+  fetchMyBookmarkIds: async () => {
+    try {
+      const { data } = await api.get('/cases/user/bookmarks');
+      return (data.cases || []).map((c: { id: string }) => c.id);
+    } catch {
+      return [];
     }
   },
 

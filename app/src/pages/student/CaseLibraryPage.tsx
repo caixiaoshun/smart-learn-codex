@@ -36,7 +36,7 @@ type ViewMode = 'grid' | 'list';
 type SortOption = 'relevance' | 'newest' | 'rating';
 
 export function CaseLibraryPage() {
-  const { cases, pagination, fetchCases, createCase, bookmarkCase, unbookmarkCase } = useCaseStore();
+  const { cases, pagination, fetchCases, createCase, bookmarkCase, unbookmarkCase, fetchMyBookmarkIds } = useCaseStore();
   const { selectedModel, fetchModels } = useChatStore();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -47,8 +47,6 @@ export function CaseLibraryPage() {
   const [sortBy, setSortBy] = useState<SortOption>('relevance');
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
   const [currentPage, setCurrentPage] = useState(1);
-  // TODO: Sync with backend once a bulk bookmark-check endpoint is available.
-  // Currently only tracks bookmarks toggled in this session.
   const [bookmarkedIds, setBookmarkedIds] = useState<Set<string>>(new Set());
 
   // Upload Case Dialog state
@@ -85,6 +83,7 @@ export function CaseLibraryPage() {
   useEffect(() => {
     fetchCases();
     fetchModels();
+    fetchMyBookmarkIds().then((ids) => setBookmarkedIds(new Set(ids)));
   }, []);
 
   // Open AI dialog when navigated with ?ai=true

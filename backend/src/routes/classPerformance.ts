@@ -123,6 +123,16 @@ router.get('/summary/:classId', authenticate, async (req, res) => {
 
     const records = await prisma.classPerformanceRecord.findMany({ where: { classId } });
 
+    let qaWeight = 0.5;
+    let shareWeight = 0.5;
+    if (classWithStudents.performanceScoringRules) {
+      try {
+        const rules = JSON.parse(classWithStudents.performanceScoringRules);
+        if (typeof rules.qaWeight === 'number') qaWeight = rules.qaWeight;
+        if (typeof rules.shareWeight === 'number') shareWeight = rules.shareWeight;
+      } catch { /* use defaults */ }
+    }
+
     const summary = classWithStudents.students.map((s) => {
       const studentRecords = records.filter((r) => r.studentId === s.studentId);
       const qa = studentRecords.filter((r) => r.type === 'CLASSROOM_QA');
@@ -136,7 +146,7 @@ router.get('/summary/:classId', authenticate, async (req, res) => {
         shareCount: share.length,
         shareAvgScore: Math.round(shareAvg * 10) / 10,
         totalRecords: studentRecords.length,
-        compositeScore: Math.round((qaAvg * 0.5 + shareAvg * 0.5) * 10) / 10,
+        compositeScore: Math.round((qaAvg * qaWeight + shareAvg * shareWeight) * 10) / 10,
       };
     });
 
@@ -144,6 +154,47 @@ router.get('/summary/:classId', authenticate, async (req, res) => {
   } catch (error) {
     console.error('获取平时表现汇总失败:', error);
     res.status(500).json({ error: '获取平时表现汇总失败' });
+  }
+});
+
+router.get('/scoring-rules/:classId', authenticate, requireTeacher, async (req, res) => {
+  try {
+    const { classId } = req.params;
+    const permission = await ensureClassPermission(classId, req.user!.userId, 'teacher');
+    if (!permission.ok) return res.status(permission.code).json({ error: permission.error });
+
+    const classData = await prisma.class.findUnique({ where: { id: classId }, select: { performanceScoringRules: true } });
+    const defaults = { maxScore: 5, qaWeight: 0.5, shareWeight: 0.5 };
+    let rules = defaults;
+    if (classData?.performanceScoringRules) {
+      try { rules = { ...defaults, ...JSON.parse(classData.performanceScoringRules) }; } catch { /* use defaults */ }
+    }
+    res.json({ rules });
+  } catch (error) {
+    console.error('获取评分规则失败:', error);
+    res.status(500).json({ error: '获取评分规则失败' });
+  }
+});
+
+router.put('/scoring-rules/:classId', authenticate, requireTeacher, async (req, res) => {
+  try {
+    const { classId } = req.params;
+    const schema = z.object({
+      maxScore: z.number().int().min(1).max(100),
+      qaWeight: z.number().min(0).max(1),
+      shareWeight: z.number().min(0).max(1),
+    }).refine((data) => Math.abs(data.qaWeight + data.shareWeight - 1) < 0.01, { message: '权重之和必须等于 1' });
+    const rules = schema.parse(req.body);
+
+    const permission = await ensureClassPermission(classId, req.user!.userId, 'teacher');
+    if (!permission.ok) return res.status(permission.code).json({ error: permission.error });
+
+    await prisma.class.update({ where: { id: classId }, data: { performanceScoringRules: JSON.stringify(rules) } });
+    res.json({ message: '评分规则已更新', rules });
+  } catch (error) {
+    if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors[0].message });
+    console.error('更新评分规则失败:', error);
+    res.status(500).json({ error: '更新评分规则失败' });
   }
 });
 

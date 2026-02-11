@@ -108,7 +108,10 @@ model Class {
   
   // 知识点清单
   knowledgePoints    KnowledgePoint[]
-  
+
+  // 平时表现评分规则 JSON: { maxScore, qaWeight, shareWeight }
+  performanceScoringRules String?
+
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 
