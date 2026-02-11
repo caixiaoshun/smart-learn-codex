@@ -273,7 +273,7 @@ export function ResourceLibraryPage() {
 
   // 打开资源详情
   const openResourceDetail = (resourceId: string) => {
-    navigate(`/cases/${resourceId}`);
+    navigate(`/resources/${resourceId}`);
   };
 
   // 处理资源卡片点击
@@ -283,7 +283,7 @@ export function ResourceLibraryPage() {
 
   // 处理案例卡片点击
   const handleCaseClick = (caseId: string) => {
-    navigate(`/resources?case=${caseId}`);
+    navigate(`/cases/${caseId}`);
   };
 
   // 处理资源按钮点击 (Notebook / Demo / Homework)

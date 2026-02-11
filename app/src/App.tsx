@@ -84,6 +84,7 @@ function App() {
           <Route path="/dashboard" element={<DashboardRedirect />} />
           <Route path="/homeworks" element={<StudentHomeworkPage />} />
           <Route path="/resources" element={<ResourceLibraryPage />} />
+          <Route path="/resources/:id" element={<CaseDetailPage />} />
           <Route path="/ai-assistant" element={<AIAssistantPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/student/analytics" element={<StudentAnalyticsPage />} />
