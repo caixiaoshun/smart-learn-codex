@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useHomeworkStore, type Homework, type Submission, type CreateHomeworkData } from '@/stores/homeworkStore';
 import { useClassStore } from '@/stores/classStore';
 import { useResourceStore } from '@/stores/resourceStore';
+import { useGroupStore } from '@/stores/groupStore';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -31,6 +32,8 @@ import {
   ArrowLeft,
   Trophy,
   Loader2,
+  WandSparkles,
+  GripVertical,
 } from 'lucide-react';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import DOMPurify from 'dompurify';
@@ -195,6 +198,7 @@ export function HomeworkManagementPage() {
   const { homeworks, isLoading, fetchTeacherHomeworks, createHomework, updateHomework, gradeSubmission, exportGrades, previewFile, downloadFile } = useHomeworkStore();
   const { classes, fetchTeacherClasses } = useClassStore();
   const { createResourceFromHomework } = useResourceStore();
+  const { groups, unassignedStudents, groupConfig, fetchGroups, assignStudent, autoAssignStudents } = useGroupStore();
   
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
@@ -249,6 +253,11 @@ export function HomeworkManagementPage() {
   const [resourceCategory, setResourceCategory] = useState('');
   const [isAddingToResource, setIsAddingToResource] = useState(false);
   const [selectedResourceFileKey, setSelectedResourceFileKey] = useState('');
+  const [isGroupCenterOpen, setIsGroupCenterOpen] = useState(false);
+  const [groupHomework, setGroupHomework] = useState<Homework | null>(null);
+  const [dragStudentId, setDragStudentId] = useState<string | null>(null);
+  const [isAutoAssigning, setIsAutoAssigning] = useState(false);
+  const [isGeneratingAIReview, setIsGeneratingAIReview] = useState(false);
 
   // 获取可推荐的文件列表（仅 .ipynb 和 .pdf）
   const recommendableFiles = useMemo(() => {
@@ -331,6 +340,64 @@ export function HomeworkManagementPage() {
     '代码风格良好，但存在一些边界情况未处理。',
     '实验报告格式规范，分析到位。',
   ];
+
+
+  const openGroupCenter = async (homework: Homework) => {
+    if (homework.type !== 'GROUP_PROJECT') {
+      toast.error('仅项目小组作业支持组队中心');
+      return;
+    }
+    setGroupHomework(homework);
+    await fetchGroups(homework.id);
+    setIsGroupCenterOpen(true);
+  };
+
+  const handleDropToGroup = async (groupId: string) => {
+    if (!dragStudentId || !groupHomework) return;
+    try {
+      await assignStudent(groupId, dragStudentId);
+      await fetchGroups(groupHomework.id);
+    } catch {
+      // 错误由拦截器处理
+    } finally {
+      setDragStudentId(null);
+    }
+  };
+
+  const handleAutoAssign = async () => {
+    if (!groupHomework) return;
+    setIsAutoAssigning(true);
+    try {
+      const preferred = groupConfig?.maxSize || 4;
+      await autoAssignStudents(groupHomework.id, preferred);
+    } catch {
+      // 错误由拦截器处理
+    } finally {
+      setIsAutoAssigning(false);
+    }
+  };
+
+  const handleGenerateAIReview = async () => {
+    if (!selectedHomework || !selectedSubmission) return;
+    setIsGeneratingAIReview(true);
+    try {
+      const summary = `学生：${selectedSubmission.student?.name || '未知'}
+提交文件：${selectedSubmission.files.join(', ')}
+已有分数：${selectedSubmission.score ?? '未评分'}
+已有评语：${selectedSubmission.feedback || '无'}`;
+      const aiMarkdown = await useHomeworkStore.getState().generateAIReview({
+        homeworkTitle: selectedHomework.title,
+        submissionSummary: summary,
+        maxScore: selectedHomework.maxScore,
+      });
+      setGradeFeedback(aiMarkdown);
+      toast.success('已生成 AI 批改建议');
+    } catch {
+      toast.error('AI 批改建议生成失败');
+    } finally {
+      setIsGeneratingAIReview(false);
+    }
+  };
 
   useEffect(() => {
     fetchTeacherHomeworks();
@@ -807,6 +874,16 @@ export function HomeworkManagementPage() {
                       <Download className="w-4 h-4 mr-1" />
                       导出
                     </Button>
+                    {homework.type === 'GROUP_PROJECT' && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => openGroupCenter(homework)}
+                      >
+                        <Users className="w-4 h-4 mr-1" />
+                        组队中心
+                      </Button>
+                    )}
                   </div>
                 </div>
               </CardHeader>
@@ -1125,9 +1202,15 @@ export function HomeworkManagementPage() {
 
                   {/* 评语 */}
                   <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <label className="text-sm font-medium">评语</label>
-                      <span className="text-xs text-gray-400">可选</span>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <label className="text-sm font-medium">评语</label>
+                        <span className="text-xs text-gray-400">可选</span>
+                      </div>
+                      <Button type="button" variant="outline" size="sm" className="gap-1" onClick={handleGenerateAIReview} disabled={isGeneratingAIReview}>
+                        {isGeneratingAIReview ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <WandSparkles className="w-3.5 h-3.5" />}
+                        AI自动批改
+                      </Button>
                     </div>
                     <Textarea
                       value={gradeFeedback}
@@ -1271,6 +1354,61 @@ export function HomeworkManagementPage() {
             >
               保存修改
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+
+      <Dialog open={isGroupCenterOpen} onOpenChange={setIsGroupCenterOpen}>
+        <DialogContent className="max-w-5xl">
+          <DialogHeader>
+            <DialogTitle>作业动态组队中心{groupHomework ? ` - ${groupHomework.title}` : ''}</DialogTitle>
+          </DialogHeader>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 pt-2">
+            <Card className="lg:col-span-1">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">待分组学生（{unassignedStudents.length}）</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 max-h-[55vh] overflow-auto">
+                {unassignedStudents.map((student) => (
+                  <div
+                    key={student.id}
+                    draggable
+                    onDragStart={() => setDragStudentId(student.id)}
+                    className="flex items-center gap-2 rounded-lg border bg-muted/30 p-2 cursor-grab"
+                  >
+                    <GripVertical className="h-4 w-4 text-muted-foreground" />
+                    <Avatar className="h-8 w-8"><AvatarImage src={student.avatar} /><AvatarFallback>{student.name[0]}</AvatarFallback></Avatar>
+                    <div className="min-w-0"><p className="text-sm font-medium truncate">{student.name}</p><p className="text-xs text-muted-foreground truncate">{student.email}</p></div>
+                  </div>
+                ))}
+                {unassignedStudents.length === 0 && <p className="text-sm text-muted-foreground">全部学生已分组。</p>}
+              </CardContent>
+            </Card>
+            <div className="lg:col-span-2 space-y-3">
+              <div className="flex justify-between items-center">
+                <p className="text-sm text-muted-foreground">将左侧学生拖拽到右侧组卡，或使用自动分组。建议每组 {groupConfig?.minSize || 2}-{groupConfig?.maxSize || 6} 人。</p>
+                <Button className="gap-2" onClick={handleAutoAssign} disabled={isAutoAssigning || !groupHomework}>
+                  {isAutoAssigning ? <Loader2 className="h-4 w-4 animate-spin" /> : <WandSparkles className="h-4 w-4" />}自动分组
+                </Button>
+              </div>
+              <div className="grid md:grid-cols-2 gap-3 max-h-[55vh] overflow-auto pr-1">
+                {groups.map((group) => (
+                  <Card key={group.id} onDragOver={(e) => e.preventDefault()} onDrop={() => handleDropToGroup(group.id)} className="border-dashed">
+                    <CardHeader className="pb-2"><CardTitle className="text-sm">{group.name}（{group.members.length}人）</CardTitle></CardHeader>
+                    <CardContent className="space-y-2">
+                      {group.members.map((member) => (
+                        <div key={member.id} className="flex items-center gap-2 rounded-md bg-muted/30 p-2">
+                          <Avatar className="h-7 w-7"><AvatarImage src={member.student.avatar} /><AvatarFallback>{member.student.name[0]}</AvatarFallback></Avatar>
+                          <span className="text-sm">{member.student.name}</span>
+                          {member.role === 'LEADER' && <Badge variant="secondary" className="ml-auto">组长</Badge>}
+                        </div>
+                      ))}
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

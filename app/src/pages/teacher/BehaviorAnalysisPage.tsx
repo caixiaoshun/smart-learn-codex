@@ -1,350 +1,193 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import api from '@/lib/api';
 import { useTeacherStore } from '@/stores/teacherStore';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { toast } from 'sonner';
-import { Progress } from '@/components/ui/progress';
+import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { BarChart } from '@/components/charts/BarChart';
 import { RadarChart } from '@/components/charts/RadarChart';
-import {
-  Download,
-  Users,
-  CheckCircle,
-  BarChart3,
-  AlertTriangle,
-  TrendingUp,
-  TrendingDown,
-  Search,
-  ChevronRight,
-  MoreVertical,
-  Sparkles,
-} from 'lucide-react';
+import { Download, Search, Sparkles, Users, AlertTriangle, CheckCircle, Activity } from 'lucide-react';
+import { toast } from 'sonner';
+
+interface BehaviorOverview {
+  summary: {
+    totalStudents: number;
+    highRiskCount: number;
+    mediumRiskCount: number;
+    lowRiskCount: number;
+    avgBehaviorScore: number;
+    updatedAt: string;
+  };
+  activityTrend: { name: string; value: number }[];
+  abilityRadar: { subject: string; value: number; fullMark: number }[];
+}
 
 export function BehaviorAnalysisPage() {
-  const { students, classStats, fetchStudents, fetchClassStats, fetchAIInsights } = useTeacherStore();
+  const { students, fetchStudents } = useTeacherStore();
+  const [overview, setOverview] = useState<BehaviorOverview | null>(null);
+  const [search, setSearch] = useState('');
+  const [riskFilter, setRiskFilter] = useState<'ALL' | 'HIGH' | 'MEDIUM' | 'LOW'>('ALL');
+  const [isLoading, setIsLoading] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isApplying, setIsApplying] = useState(false);
+
+  const load = async () => {
+    setIsLoading(true);
+    try {
+      await fetchStudents();
+      const { data } = await api.get('/behavior/teacher/overview');
+      setOverview(data);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   useEffect(() => {
-    fetchStudents();
-    fetchClassStats();
-    fetchAIInsights();
+    load();
   }, []);
 
-  // Derive chart data from student behavior data
-  const activityData = (() => {
-    if (!students.length) return [];
-    // Generate activity trend from students' quiz averages, grouped for chart display
-    return students.slice(0, 10).map((s, i) => ({
-      name: `${i + 1}日`,
-      value: s.quizAvg ?? 0,
-    }));
-  })();
-
-  const abilityData = (() => {
-    if (!students.length) return [];
-    const avgQuiz = Math.round(students.reduce((sum, s) => sum + (s.quizAvg ?? 0), 0) / students.length);
-    const avgCoding = Math.round(students.reduce((sum, s) => sum + (s.codingHours ?? 0), 0) / students.length);
-    const avgDiscussion = Math.round(Math.min(100, students.reduce((sum, s) => sum + (s.discussionPosts ?? 0), 0) / students.length * 10));
-    return [
-      { subject: '编程', value: Math.min(100, avgCoding * 5), fullMark: 100 },
-      { subject: '协作', value: avgDiscussion, fullMark: 100 },
-      { subject: '逻辑', value: avgQuiz, fullMark: 100 },
-      { subject: '表达', value: Math.round((avgQuiz + avgDiscussion) / 2), fullMark: 100 },
-      { subject: '活跃', value: Math.min(100, avgCoding * 4 + avgDiscussion / 2), fullMark: 100 },
-    ];
-  })();
+  const filteredStudents = useMemo(() => {
+    return students.filter((student) => {
+      if (riskFilter !== 'ALL' && student.riskLevel !== riskFilter) return false;
+      const q = search.trim().toLowerCase();
+      if (!q) return true;
+      return student.studentName.toLowerCase().includes(q) || student.studentId.toLowerCase().includes(q);
+    });
+  }, [students, search, riskFilter]);
 
   const getRiskBadge = (level: string) => {
-    switch (level) {
-      case 'HIGH':
-        return (
-          <Badge className="bg-red-100 text-red-700 hover:bg-red-100">
-            高风险
-          </Badge>
-        );
-      case 'MEDIUM':
-        return (
-          <Badge className="bg-yellow-100 text-yellow-700 hover:bg-yellow-100">
-            中风险
-          </Badge>
-        );
-      case 'LOW':
-        return (
-          <Badge className="bg-green-100 text-green-700 hover:bg-green-100">
-            低风险
-          </Badge>
-        );
-      default:
-        return null;
+    if (level === 'HIGH') return <Badge className="bg-red-100 text-red-700">高风险</Badge>;
+    if (level === 'MEDIUM') return <Badge className="bg-yellow-100 text-yellow-700">中风险</Badge>;
+    return <Badge className="bg-green-100 text-green-700">低风险</Badge>;
+  };
+
+  const handleExport = async () => {
+    setIsExporting(true);
+    try {
+      const response = await api.get('/behavior/teacher/export', { params: { format: 'csv' }, responseType: 'blob' });
+      const url = window.URL.createObjectURL(response.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `学生行为分析-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      toast.success('报表导出成功');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleApplyIntervention = async () => {
+    const target = students.find((s) => s.riskLevel === 'HIGH') || students[0];
+    if (!target) {
+      toast.error('暂无可干预学生');
+      return;
+    }
+    setIsApplying(true);
+    try {
+      await api.post(`/behavior/teacher/interventions/${target.id}/remind`, {
+        message: `系统检测到您近期学习活跃度下降，请及时完成本周学习任务并联系任课教师获得支持。`,
+      });
+      toast.success(`已向 ${target.studentName} 发送提醒`);
+    } finally {
+      setIsApplying(false);
     }
   };
 
   return (
     <div className="space-y-6">
-      {/* 面包屑 */}
-      <div className="flex items-center gap-2 text-sm text-gray-500">
-        <span>首页</span>
-        <ChevronRight className="w-4 h-4" />
-        <span>课程管理</span>
-        <ChevronRight className="w-4 h-4" />
-        <span className="text-blue-600">学生行为数据</span>
-      </div>
-
-      {/* 页面标题 */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">学生行为数据分析</h1>
-          <p className="text-gray-600 mt-1">
-            汇总清洗随堂测验、在线讨论、编程实验等数据，生成精准干预建议。
-          </p>
+          <h1 className="text-2xl font-bold text-slate-900">学生行为数据分析</h1>
+          <p className="mt-1 text-sm text-slate-600">图表与风险数据均来自后端行为分析 API 聚合结果。</p>
         </div>
-        <div className="flex gap-3">
-          <Button variant="outline" className="gap-2" onClick={() => toast.success('报表导出中...')}>
-            <Download className="w-4 h-4" />
-            导出报表
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={handleExport} disabled={isExporting}>
+            <Download className="mr-2 h-4 w-4" />导出报表
           </Button>
-          <Button className="gap-2 bg-blue-600 hover:bg-blue-700" onClick={() => toast.success('关注清单已生成')}>
-            <Sparkles className="w-4 h-4" />
-            生成关注清单
+          <Button onClick={handleApplyIntervention} disabled={isApplying} className="bg-blue-600 hover:bg-blue-700">
+            <Sparkles className="mr-2 h-4 w-4" />应用干预措施
           </Button>
         </div>
       </div>
 
-      {/* AI 洞察 */}
+      <div className="grid gap-4 md:grid-cols-4">
+        <Card><CardContent className="p-5"><p className="text-xs text-slate-500">学生总数</p><p className="mt-2 text-2xl font-semibold">{overview?.summary.totalStudents ?? 0}</p></CardContent></Card>
+        <Card><CardContent className="p-5"><p className="text-xs text-slate-500">待干预预警</p><p className="mt-2 text-2xl font-semibold text-red-600">{overview?.summary.highRiskCount ?? 0}</p></CardContent></Card>
+        <Card><CardContent className="p-5"><p className="text-xs text-slate-500">中风险</p><p className="mt-2 text-2xl font-semibold text-amber-600">{overview?.summary.mediumRiskCount ?? 0}</p></CardContent></Card>
+        <Card><CardContent className="p-5"><p className="text-xs text-slate-500">平均行为分</p><p className="mt-2 text-2xl font-semibold text-blue-700">{overview?.summary.avgBehaviorScore ?? 0}</p></CardContent></Card>
+      </div>
+
       <Card className="border-blue-200 bg-blue-50/50">
-        <CardContent className="p-5">
-          <div className="flex items-start gap-4">
-            <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center flex-shrink-0">
-              <Sparkles className="w-6 h-6 text-blue-600" />
-            </div>
-            <div className="flex-1">
-              <h3 className="font-semibold text-gray-900 mb-2">
-                AI 洞察：编程实验异常预警
-              </h3>
-              <p className="text-gray-600 leading-relaxed">
-                检测到 <span className="font-semibold text-gray-900">第4小组</span> 的3名学生在过去48小时内编程提交频率骤降{' '}
-                <span className="text-red-600 font-semibold">-45%</span>。系统分析可能存在语法理解障碍，建议推送
-                <span className="text-blue-600 underline cursor-pointer">"Python 基础语法回顾"</span>
-                资源包进行干预。
-              </p>
-            </div>
-            <Button variant="outline" className="flex-shrink-0" onClick={() => toast.success('干预措施已应用')}>
-              应用干预措施
-            </Button>
+        <CardContent className="p-5 flex items-start gap-3">
+          <div className="rounded-xl bg-blue-100 p-2"><Sparkles className="h-5 w-5 text-blue-600" /></div>
+          <div className="flex-1">
+            <p className="font-semibold text-slate-900">AI 洞察：编程实验异常预警</p>
+            <p className="text-sm text-slate-600">检测到高风险学生近期编程学习时长显著下降，建议优先推送语法基础资源并发送学习提醒。</p>
+            <p className="mt-1 text-xs text-slate-500">最近更新：{overview?.summary.updatedAt ? new Date(overview.summary.updatedAt).toLocaleString('zh-CN') : '--'}</p>
           </div>
         </CardContent>
       </Card>
 
-      {/* 统计卡片 */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="text-sm text-gray-500 flex items-center gap-2">
-                  <Users className="w-4 h-4 text-gray-400" />
-                  学生总数
-                </p>
-                <div className="mt-2">
-                  <span className="text-3xl font-bold text-gray-900">
-                    {classStats?.totalStudents}
-                  </span>
-                </div>
-                <p className="mt-1 text-sm text-green-600 flex items-center gap-1">
-                  <TrendingUp className="w-3 h-3" />
-                  全勤
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="text-sm text-gray-500 flex items-center gap-2">
-                  <CheckCircle className="w-4 h-4 text-gray-400" />
-                  测验平均完成率
-                </p>
-                <div className="mt-2">
-                  <span className="text-3xl font-bold text-gray-900">
-                    {classStats?.submissionRate}%
-                  </span>
-                </div>
-                <p className="mt-1 text-sm text-green-600 flex items-center gap-1">
-                  <TrendingUp className="w-3 h-3" />
-                  +2.4% 环比
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="text-sm text-gray-500 flex items-center gap-2">
-                  <BarChart3 className="w-4 h-4 text-gray-400" />
-                  平均参与度评分
-                </p>
-                <div className="mt-2 flex items-baseline gap-1">
-                  <span className="text-3xl font-bold text-gray-900">
-                    {classStats?.submissionRate}
-                  </span>
-                  <span className="text-gray-500">/100</span>
-                </div>
-                <div className="mt-2 w-32">
-                  <Progress value={classStats?.submissionRate} className="h-2" />
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="text-sm text-gray-500 flex items-center gap-2 text-red-600">
-                  <AlertTriangle className="w-4 h-4" />
-                  待干预预警
-                </p>
-                <div className="mt-2">
-                  <span className="text-3xl font-bold text-red-600">
-                    {classStats?.pendingAlerts}
-                  </span>
-                </div>
-                <p className="mt-1 text-sm text-red-600 flex items-center gap-1">
-                  <TrendingDown className="w-3 h-3" />
-                  新增 3 人
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* 图表区域 */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* 近30天活动趋势 */}
+      <div className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <div>
-              <CardTitle className="text-lg font-semibold">近30天活动趋势</CardTitle>
-            </div>
-            <Badge variant="secondary">所有活动</Badge>
-          </CardHeader>
-          <CardContent>
-            <div className="h-64">
-              <BarChart data={activityData} />
-            </div>
-          </CardContent>
+          <CardHeader><CardTitle>近10天活动趋势</CardTitle></CardHeader>
+          <CardContent className="h-72">{isLoading ? <div className="flex h-full items-center justify-center text-sm text-slate-500">加载中...</div> : <BarChart data={overview?.activityTrend ?? []} />}</CardContent>
         </Card>
-
-        {/* 能力维度分布 */}
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-lg font-semibold">能力维度分布</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="h-56">
-              <RadarChart data={abilityData} />
-            </div>
-          </CardContent>
+          <CardHeader><CardTitle>能力维度分布</CardTitle></CardHeader>
+          <CardContent className="h-72">{isLoading ? <div className="flex h-full items-center justify-center text-sm text-slate-500">加载中...</div> : <RadarChart data={overview?.abilityRadar ?? []} />}</CardContent>
         </Card>
       </div>
 
-      {/* 学生数据表格 */}
       <Card>
-        <CardContent className="p-6">
-          {/* 筛选栏 */}
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex gap-3">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                <input
-                  type="text"
-                  placeholder="搜索学生姓名/学号..."
-                  className="pl-9 pr-4 py-2 bg-gray-100 border-0 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-64"
-                />
-              </div>
-              <select className="px-4 py-2 bg-gray-100 border-0 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <option>2023级 A班</option>
-                <option>2023级 B班</option>
-              </select>
-              <select className="px-4 py-2 bg-gray-100 border-0 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <option>全部风险等级</option>
-                <option>高风险</option>
-                <option>中风险</option>
-                <option>低风险</option>
-              </select>
+        <CardHeader className="gap-3 md:flex-row md:items-center md:justify-between">
+          <CardTitle>学生行为表</CardTitle>
+          <div className="flex flex-wrap gap-2">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2 top-2.5 h-4 w-4 text-slate-400" />
+              <Input className="w-60 pl-8" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜索学生姓名/学号" />
             </div>
-            <p className="text-sm text-gray-500">
-              共 45 条数据，更新于 10分钟前
-            </p>
+            <select className="rounded-md border px-3 text-sm" value={riskFilter} onChange={(e) => setRiskFilter(e.target.value as 'ALL' | 'HIGH' | 'MEDIUM' | 'LOW')}>
+              <option value="ALL">全部风险等级</option>
+              <option value="HIGH">高风险</option>
+              <option value="MEDIUM">中风险</option>
+              <option value="LOW">低风险</option>
+            </select>
           </div>
-
-          {/* 表格 */}
+        </CardHeader>
+        <CardContent>
           <div className="overflow-x-auto">
-            <table className="w-full">
+            <table className="w-full min-w-[860px] text-sm">
               <thead>
-                <tr className="border-b border-gray-200">
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">学生信息</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">测验均分</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">编程时长 (小时)</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">讨论区活跃度</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">最近活动</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">风险评估</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">操作</th>
+                <tr className="border-b text-left text-slate-500">
+                  <th className="py-3">学生</th><th className="py-3">测验均分</th><th className="py-3">编程时长</th><th className="py-3">讨论次数</th><th className="py-3">最近活跃</th><th className="py-3">风险评估</th>
                 </tr>
               </thead>
               <tbody>
-                {students.map((student) => (
-                  <tr key={student.id} className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="py-4 px-4">
-                      <div className="flex items-center gap-3">
-                        <Avatar className="w-10 h-10">
-                          <AvatarImage src={student.avatar} />
-                          <AvatarFallback className="bg-purple-100 text-purple-600">
-                            {student.studentName[0]}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div>
-                          <p className="font-medium text-gray-900">{student.studentName}</p>
-                          <p className="text-sm text-gray-500">学号: {student.studentId}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="py-4 px-4">
+                {filteredStudents.map((student) => (
+                  <tr key={student.id} className="border-b last:border-0">
+                    <td className="py-3">
                       <div className="flex items-center gap-2">
-                        <span className="font-medium">{student.quizAvg}%</span>
-                        <div className="w-16">
-                          <Progress 
-                            value={student.quizAvg} 
-                            className={`h-1.5 ${
-                              student.quizAvg < 70 ? 'bg-red-100 [&>div]:bg-red-500' : ''
-                            }`}
-                          />
-                        </div>
+                        <Avatar className="h-8 w-8"><AvatarImage src={student.avatar || undefined} /><AvatarFallback>{student.studentName[0]}</AvatarFallback></Avatar>
+                        <div><p className="font-medium">{student.studentName}</p><p className="text-xs text-slate-500">{student.studentId}</p></div>
                       </div>
                     </td>
-                    <td className="py-4 px-4 text-gray-700">{student.codingHours}</td>
-                    <td className="py-4 px-4 text-gray-700">{student.discussionPosts} 贴</td>
-                    <td className="py-4 px-4 text-gray-500">{student.lastActive}</td>
-                    <td className="py-4 px-4">{getRiskBadge(student.riskLevel)}</td>
-                    <td className="py-4 px-4">
-                      <button className="text-gray-400 hover:text-gray-600">
-                        <MoreVertical className="w-5 h-5" />
-                      </button>
-                    </td>
+                    <td className="py-3">{student.quizAvg}</td>
+                    <td className="py-3">{student.codingHours} h</td>
+                    <td className="py-3">{student.discussionPosts}</td>
+                    <td className="py-3">{student.lastActive}</td>
+                    <td className="py-3">{getRiskBadge(student.riskLevel)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          {filteredStudents.length === 0 && <p className="py-8 text-center text-sm text-slate-500">暂无匹配数据</p>}
         </CardContent>
       </Card>
     </div>
