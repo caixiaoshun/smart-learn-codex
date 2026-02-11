@@ -73,12 +73,6 @@ export function ResourceLibraryPage() {
   const [uploadCategory, setUploadCategory] = useState('');
   const [isUploading, setIsUploading] = useState(false);
 
-  // 资源详情 - 使用独立页面
-  const getResourceBasePath = () => {
-    if (window.location.pathname.startsWith('/teacher')) return '/teacher/resources';
-    return '/resources';
-  };
-
   const handleUploadResource = async () => {
     if (!uploadTitle.trim() || !uploadDescription.trim()) {
       toast.error('请填写标题和描述');
@@ -279,7 +273,7 @@ export function ResourceLibraryPage() {
 
   // 打开资源详情
   const openResourceDetail = (resourceId: string) => {
-    navigate(`${getResourceBasePath()}/${resourceId}`);
+    navigate(`/cases/${resourceId}`);
   };
 
   // 处理资源卡片点击

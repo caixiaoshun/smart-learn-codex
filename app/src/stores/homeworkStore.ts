@@ -78,6 +78,7 @@ interface HomeworkState {
   fetchHomeworkDetail: (id: string) => Promise<void>;
   gradeSubmission: (homeworkId: string, submissionId: string, data: { score: number; feedback?: string }) => Promise<void>;
   exportGrades: (homeworkId: string, format: 'csv' | 'json') => Promise<void>;
+  generateAIReview: (payload: { homeworkTitle: string; submissionSummary: string; maxScore: number }) => Promise<string>;
   
   // 学生方法
   fetchStudentHomeworks: () => Promise<void>;
@@ -184,6 +185,27 @@ export const useHomeworkStore = create<HomeworkState>((set, get) => ({
       triggerBlobDownload(blob, '成绩单.json');
     }
     toast.success('成绩导出成功');
+  },
+
+
+  generateAIReview: async ({ homeworkTitle, submissionSummary, maxScore }) => {
+    const prompt = `你是一名课程教师助教，请基于以下信息生成批改建议。
+作业标题：${homeworkTitle}
+作业满分：${maxScore}
+学生提交摘要：${submissionSummary}
+
+请输出 Markdown，包含：
+1) 总体评价
+2) 优点（2-4条）
+3) 待改进点（2-4条）
+4) 建议分数（0-${maxScore}）
+5) 可直接给学生的反馈。`;
+    const { data } = await api.post('/ai/chat', { content: prompt });
+    const content = data?.message?.content;
+    if (!content || typeof content !== 'string') {
+      throw new Error('AI 返回内容为空');
+    }
+    return content;
   },
 
   // 获取学生的作业列表
