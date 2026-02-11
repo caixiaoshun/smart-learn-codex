@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -8,10 +8,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { useAuthStore } from '@/stores/authStore';
 import { useCaseStore } from '@/stores/caseStore';
 import { useResourceStore } from '@/stores/resourceStore';
-import { ArrowLeft, Bookmark, BookmarkCheck, ExternalLink, Loader2, MessageCircle, Send } from 'lucide-react';
+import { ArrowLeft, Bookmark, BookmarkCheck, Eye, Loader2, MessageCircle, Send, ExternalLink } from 'lucide-react';
 import type { Case, Comment, Resource } from '@/types';
-
-type DetailMode = 'case' | 'resource' | null;
 
 function PDFPreview({ url }: { url: string }) {
   return <iframe src={url} className="h-[520px] w-full rounded-md border" title="PDF Preview" />;
@@ -19,10 +17,17 @@ function PDFPreview({ url }: { url: string }) {
 
 export function CaseDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const location = useLocation();
   const navigate = useNavigate();
   const { isAuthenticated } = useAuthStore();
+
   const caseStore = useCaseStore();
   const resourceStore = useResourceStore();
+
+  const detailMode = useMemo<'case' | 'resource'>(() => {
+    if (location.pathname.includes('/resources/')) return 'resource';
+    return 'case';
+  }, [location.pathname]);
 
   const [mode, setMode] = useState<DetailMode>(null);
   const [caseData, setCaseData] = useState<Case | null>(null);
@@ -31,77 +36,72 @@ export function CaseDetailPage() {
   const [comments, setComments] = useState<Comment[]>([]);
   const [commentText, setCommentText] = useState('');
   const [loading, setLoading] = useState(true);
-  const [bookmarkLoading, setBookmarkLoading] = useState(false);
   const [isBookmarked, setIsBookmarked] = useState(false);
+  const [bookmarkLoading, setBookmarkLoading] = useState(false);
   const [commentLoading, setCommentLoading] = useState(false);
 
   const loadDetail = useCallback(async () => {
     if (!id) return;
     setLoading(true);
-    setMode(null);
     setCaseData(null);
     setResourceData(null);
     setResourcePreview(null);
 
     try {
-      try {
-        const caseDetail = await caseStore.fetchCaseDetail(id);
-        setMode('case');
-        setCaseData(caseDetail);
-      } catch {
-        const resourceDetail = await resourceStore.fetchResourceDetail(id);
-        setMode('resource');
-        setResourceData(resourceDetail);
-        if (resourceDetail.filePath) {
+      if (detailMode === 'case') {
+        const data = await caseStore.fetchCaseDetail(id);
+        setCaseData(data);
+      } else {
+        const data = await resourceStore.fetchResourceDetail(id);
+        setResourceData(data);
+        if (data.filePath) {
           const preview = await resourceStore.previewResourceFile(id);
           setResourcePreview(preview);
         }
-        resourceStore.recordView(id);
       }
-    } catch {
-      toast.error('获取详情失败，请确认链接是否有效');
-      setMode(null);
+    } catch (error) {
+      toast.error(detailMode === 'case' ? '获取案例详情失败' : '获取资源详情失败');
     } finally {
       setLoading(false);
     }
-  }, [id, caseStore, resourceStore]);
+  }, [id, detailMode, caseStore, resourceStore]);
 
   const loadComments = useCallback(async () => {
-    if (!id || !mode) return;
+    if (!id) return;
     try {
-      const list = mode === 'case' ? await caseStore.fetchComments(id) : await resourceStore.fetchComments(id);
+      const list = detailMode === 'case' ? await caseStore.fetchComments(id) : await resourceStore.fetchComments(id);
       setComments(list as Comment[]);
     } catch {
       setComments([]);
     }
-  }, [id, mode, caseStore, resourceStore]);
+  }, [id, detailMode, caseStore, resourceStore]);
 
   useEffect(() => {
+    if (!id) return;
+    if (detailMode === 'resource') {
+      resourceStore.recordView(id);
+    }
     loadDetail();
-  }, [loadDetail]);
-
-  useEffect(() => {
     loadComments();
-  }, [loadComments]);
+  }, [id, detailMode, loadDetail, loadComments, resourceStore]);
 
   useEffect(() => {
-    if (!id || !isAuthenticated || !mode) return;
-    const check = async () => {
-      const status = mode === 'case' ? await caseStore.checkBookmark(id) : await resourceStore.checkBookmark(id);
+    if (!id || !isAuthenticated) return;
+    const run = async () => {
+      const status = detailMode === 'case' ? await caseStore.checkBookmark(id) : await resourceStore.checkBookmark(id);
       setIsBookmarked(status);
     };
-    check();
-  }, [id, isAuthenticated, mode, caseStore, resourceStore]);
+    run();
+  }, [id, detailMode, isAuthenticated, caseStore, resourceStore]);
 
   const handleBookmark = async () => {
-    if (!id || !mode) return;
-    if (!isAuthenticated) {
+    if (!id || !isAuthenticated) {
       toast.error('请先登录');
       return;
     }
     setBookmarkLoading(true);
     try {
-      if (mode === 'case') {
+      if (detailMode === 'case') {
         if (isBookmarked) await caseStore.unbookmarkCase(id);
         else await caseStore.bookmarkCase(id);
       } else if (isBookmarked) {
@@ -117,16 +117,17 @@ export function CaseDetailPage() {
   };
 
   const handleSubmitComment = async () => {
-    if (!id || !mode || !commentText.trim()) return;
+    if (!id || !commentText.trim()) return;
     if (!isAuthenticated) {
       toast.error('请先登录后再评论');
       return;
     }
+
     setCommentLoading(true);
     try {
       const content = commentText.trim();
-      const comment = mode === 'case' ? await caseStore.addComment(id, content) : await resourceStore.addComment(id, content);
-      setComments((prev) => [comment as Comment, ...prev]);
+      const newComment = detailMode === 'case' ? await caseStore.addComment(id, content) : await resourceStore.addComment(id, content);
+      setComments((prev) => [newComment as Comment, ...prev]);
       setCommentText('');
       toast.success('评论已发布');
     } finally {
@@ -135,9 +136,9 @@ export function CaseDetailPage() {
   };
 
   const handleDeleteComment = async (commentId: string) => {
-    if (!id || !mode) return;
+    if (!id) return;
     try {
-      if (mode === 'case') await caseStore.deleteComment(id, commentId);
+      if (detailMode === 'case') await caseStore.deleteComment(id, commentId);
       else await resourceStore.deleteComment(id, commentId);
       setComments((prev) => prev.filter((c) => c.id !== commentId));
       toast.success('评论已删除');
@@ -146,19 +147,19 @@ export function CaseDetailPage() {
     }
   };
 
-  const title = mode === 'case' ? caseData?.title : resourceData?.title;
-  const description = mode === 'case' ? caseData?.description : resourceData?.description;
-  const tags = mode === 'case' ? caseData?.tags || [] : resourceData?.tags || [];
+  const title = detailMode === 'case' ? caseData?.title : resourceData?.title;
+  const description = detailMode === 'case' ? caseData?.description : resourceData?.description;
+  const tags = detailMode === 'case' ? caseData?.tags || [] : resourceData?.tags || [];
 
   if (loading) {
     return <div className="flex h-[60vh] items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-blue-600" /></div>;
   }
 
-  if (!title || !mode) {
+  if (!title) {
     return (
       <div className="space-y-4">
         <Button variant="outline" onClick={() => navigate(-1)}><ArrowLeft className="mr-2 h-4 w-4" />返回</Button>
-        <Card><CardContent className="py-10 text-center text-sm text-muted-foreground">详情不存在或已被删除。</CardContent></Card>
+        <Card><CardContent className="py-10 text-center text-sm text-muted-foreground">未找到详情数据，可能 ID 类型不匹配或数据不存在。</CardContent></Card>
       </div>
     );
   }
@@ -177,14 +178,14 @@ export function CaseDetailPage() {
         <CardHeader>
           <div className="flex flex-wrap items-center gap-2">
             <CardTitle className="text-2xl">{title}</CardTitle>
-            <Badge variant="secondary">{mode === 'case' ? '案例详情' : '资源详情'}</Badge>
-            {mode === 'resource' && resourceData?.type && <Badge variant="outline">{resourceData.type}</Badge>}
+            <Badge variant="secondary">{detailMode === 'case' ? '案例详情' : '资源详情'}</Badge>
+            {detailMode === 'resource' && resourceData?.type && <Badge variant="outline">{resourceData.type}</Badge>}
           </div>
           <p className="text-sm text-muted-foreground">{description}</p>
           <div className="flex flex-wrap gap-2">{tags.map((tag) => <Badge key={tag} variant="outline">{tag}</Badge>)}</div>
         </CardHeader>
         <CardContent className="space-y-4">
-          {mode === 'case' ? (
+          {detailMode === 'case' ? (
             <>
               <div className="grid gap-3 sm:grid-cols-3">
                 <div className="rounded-md bg-slate-50 p-3 text-sm">分类：{caseData?.category || '-'}</div>
@@ -207,7 +208,9 @@ export function CaseDetailPage() {
                 </a>
               )}
               {resourcePreview?.type === 'pdf' && resourcePreview.url && <PDFPreview url={resourcePreview.url} />}
-              {resourcePreview?.type === 'ipynb' && <pre className="max-h-[520px] overflow-auto rounded-md border bg-slate-50 p-3 text-xs">{JSON.stringify(resourcePreview.content, null, 2)}</pre>}
+              {resourcePreview?.type === 'ipynb' && (
+                <pre className="max-h-[520px] overflow-auto rounded-md border bg-slate-50 p-3 text-xs">{JSON.stringify(resourcePreview.content, null, 2)}</pre>
+              )}
             </>
           )}
         </CardContent>
