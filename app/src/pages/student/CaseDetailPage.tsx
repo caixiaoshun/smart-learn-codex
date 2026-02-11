@@ -8,6 +8,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useAuthStore } from '@/stores/authStore';
 import { useCaseStore } from '@/stores/caseStore';
 import { useResourceStore } from '@/stores/resourceStore';
+import { NotebookPreview } from '@/components/NotebookPreview';
 import { ArrowLeft, Bookmark, BookmarkCheck, Eye, Loader2, MessageCircle, Send, ExternalLink } from 'lucide-react';
 import type { Case, Comment, Resource } from '@/types';
 
@@ -208,8 +209,8 @@ export function CaseDetailPage() {
                 </a>
               )}
               {resourcePreview?.type === 'pdf' && resourcePreview.url && <PDFPreview url={resourcePreview.url} />}
-              {resourcePreview?.type === 'ipynb' && (
-                <pre className="max-h-[520px] overflow-auto rounded-md border bg-slate-50 p-3 text-xs">{JSON.stringify(resourcePreview.content, null, 2)}</pre>
+              {resourcePreview?.type === 'ipynb' && resourcePreview.content && (
+                <NotebookPreview content={resourcePreview.content} />
               )}
             </>
           )}
