@@ -84,7 +84,6 @@ function App() {
           <Route path="/dashboard" element={<DashboardRedirect />} />
           <Route path="/homeworks" element={<StudentHomeworkPage />} />
           <Route path="/resources" element={<ResourceLibraryPage />} />
-          <Route path="/resources/:id" element={<CaseDetailPage />} />
           <Route path="/ai-assistant" element={<AIAssistantPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/student/analytics" element={<StudentAnalyticsPage />} />
@@ -107,7 +106,6 @@ function App() {
           <Route path="/teacher/homeworks" element={<HomeworkManagementPage />} />
           <Route path="/teacher/analytics" element={<AnalyticsPage />} />
           <Route path="/teacher/resources" element={<ResourceLibraryPage />} />
-          <Route path="/teacher/resources/:id" element={<CaseDetailPage />} />
           <Route path="/teacher/settings" element={<SettingsPage />} />
           <Route path="/teacher/behavior" element={<BehaviorAnalysisPage />} />
           <Route path="/teacher/intervention" element={<InterventionConsolePage />} />
