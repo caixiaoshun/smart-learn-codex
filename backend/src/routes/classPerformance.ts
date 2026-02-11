@@ -5,9 +5,19 @@ import { authenticate, requireTeacher, requireStudent } from '../middleware/auth
 
 const router = Router();
 
-// ========== 课堂问答 & 知识分享记录 ==========
+type PermissionResult = { ok: true } | { ok: false; code: number; error: string };
 
-// 教师创建平时表现记录
+async function ensureClassPermission(classId: string, userId: string, role: 'teacher' | 'student'): Promise<PermissionResult> {
+  const classData = await prisma.class.findUnique({ where: { id: classId } });
+  if (!classData) return { ok: false, code: 404, error: '班级不存在' };
+  if (role === 'teacher' && classData.teacherId !== userId) return { ok: false, code: 403, error: '无权操作该班级' };
+  if (role === 'student') {
+    const membership = await prisma.classStudent.findUnique({ where: { studentId_classId: { studentId: userId, classId } } });
+    if (!membership) return { ok: false, code: 403, error: '您不在该班级中' };
+  }
+  return { ok: true };
+}
+
 router.post('/record', authenticate, requireTeacher, async (req, res) => {
   try {
     const schema = z.object({
@@ -15,45 +25,25 @@ router.post('/record', authenticate, requireTeacher, async (req, res) => {
       studentId: z.string().min(1),
       type: z.enum(['CLASSROOM_QA', 'KNOWLEDGE_SHARE']),
       topic: z.string().max(200).optional(),
-      score: z.number().int().min(1).max(5).optional(), // 1-5 表现等级
-      notes: z.string().max(500).optional(),
-      evidence: z.string().optional(), // JSON: 链接或附件路径
-      duration: z.number().int().min(0).optional(), // 知识分享时长（分钟）
+      score: z.number().int().min(1).max(5).optional(),
+      notes: z.string().max(1000).optional(),
+      evidence: z.string().max(500).optional(),
+      duration: z.number().int().min(0).optional(),
       occurredAt: z.string().datetime().optional(),
     });
     const data = schema.parse(req.body);
 
-    // 验证班级归属
-    const classData = await prisma.class.findUnique({
-      where: { id: data.classId },
-    });
+    const permission = await ensureClassPermission(data.classId, req.user!.userId, 'teacher');
+    if (!permission.ok) return res.status(permission.code).json({ error: permission.error });
 
-    if (!classData) {
-      return res.status(404).json({ error: '班级不存在' });
-    }
-
-    if (classData.teacherId !== req.user!.userId) {
-      return res.status(403).json({ error: '无权操作该班级' });
-    }
-
-    // 验证学生在班级中
-    const membership = await prisma.classStudent.findUnique({
-      where: {
-        studentId_classId: {
-          studentId: data.studentId,
-          classId: data.classId,
-        },
-      },
-    });
-
-    if (!membership) {
-      return res.status(400).json({ error: '该学生不在该班级中' });
-    }
+    const classMembership = await prisma.classStudent.findUnique({ where: { studentId_classId: { studentId: data.studentId, classId: data.classId } } });
+    if (!classMembership) return res.status(400).json({ error: '该学生不在该班级中' });
 
     const record = await prisma.classPerformanceRecord.create({
       data: {
         classId: data.classId,
         studentId: data.studentId,
+        recordedById: req.user!.userId,
         type: data.type,
         topic: data.topic,
         score: data.score,
@@ -61,35 +51,35 @@ router.post('/record', authenticate, requireTeacher, async (req, res) => {
         evidence: data.evidence,
         duration: data.duration,
         occurredAt: data.occurredAt ? new Date(data.occurredAt) : new Date(),
-        recordedById: req.user!.userId,
       },
       include: {
         student: { select: { id: true, name: true, email: true, avatar: true } },
+        recordedBy: { select: { id: true, name: true } },
       },
     });
 
     res.status(201).json({ message: '记录创建成功', record });
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      return res.status(400).json({ error: error.errors[0].message });
-    }
-    console.error('创建记录失败:', error);
-    res.status(500).json({ error: '创建记录失败' });
+    if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors[0].message });
+    console.error('创建平时表现记录失败:', error);
+    res.status(500).json({ error: '创建平时表现记录失败' });
   }
 });
 
-// 获取班级平时表现记录列表
 router.get('/records/:classId', authenticate, async (req, res) => {
   try {
     const { classId } = req.params;
     const { type, studentId } = req.query;
 
-    const where: any = { classId };
-    if (type) where.type = type;
-    if (studentId) where.studentId = studentId;
+    const classData = await prisma.class.findUnique({ where: { id: classId }, include: { students: true } });
+    if (!classData) return res.status(404).json({ error: '班级不存在' });
+
+    const isTeacher = classData.teacherId === req.user!.userId;
+    const isStudent = classData.students.some((s) => s.studentId === req.user!.userId);
+    if (!isTeacher && !isStudent) return res.status(403).json({ error: '无权查看该班级数据' });
 
     const records = await prisma.classPerformanceRecord.findMany({
-      where,
+      where: { classId, ...(type && { type: String(type) }), ...(studentId && { studentId: String(studentId) }) },
       include: {
         student: { select: { id: true, name: true, email: true, avatar: true } },
         recordedBy: { select: { id: true, name: true } },
@@ -99,203 +89,117 @@ router.get('/records/:classId', authenticate, async (req, res) => {
 
     res.json({ records });
   } catch (error) {
-    console.error('获取记录列表失败:', error);
-    res.status(500).json({ error: '获取记录列表失败' });
+    console.error('获取平时表现记录失败:', error);
+    res.status(500).json({ error: '获取平时表现记录失败' });
   }
 });
 
-// 删除平时表现记录
 router.delete('/record/:id', authenticate, requireTeacher, async (req, res) => {
   try {
     const { id } = req.params;
+    const record = await prisma.classPerformanceRecord.findUnique({ where: { id } });
+    if (!record) return res.status(404).json({ error: '记录不存在' });
 
-    const record = await prisma.classPerformanceRecord.findUnique({
-      where: { id },
-    });
-
-    if (!record) {
-      return res.status(404).json({ error: '记录不存在' });
-    }
-
-    if (record.recordedById !== req.user!.userId) {
-      return res.status(403).json({ error: '无权删除此记录' });
-    }
+    const permission = await ensureClassPermission(record.classId, req.user!.userId, 'teacher');
+    if (!permission.ok) return res.status(permission.code).json({ error: permission.error });
 
     await prisma.classPerformanceRecord.delete({ where: { id } });
-
     res.json({ message: '记录删除成功' });
   } catch (error) {
-    console.error('删除记录失败:', error);
-    res.status(500).json({ error: '删除记录失败' });
+    console.error('删除平时表现记录失败:', error);
+    res.status(500).json({ error: '删除平时表现记录失败' });
   }
 });
 
-// 平时表现统计汇总
 router.get('/summary/:classId', authenticate, async (req, res) => {
   try {
     const { classId } = req.params;
+    const classWithStudents = await prisma.class.findUnique({ where: { id: classId }, include: { students: { include: { student: { select: { id: true, name: true, email: true, avatar: true } } } } } });
+    if (!classWithStudents) return res.status(404).json({ error: '班级不存在' });
 
-    // 获取班级所有学生
-    const students = await prisma.classStudent.findMany({
-      where: { classId },
-      include: {
-        student: { select: { id: true, name: true, email: true, avatar: true } },
-      },
-    });
+    const isTeacher = classWithStudents.teacherId === req.user!.userId;
+    const isStudent = classWithStudents.students.some((s) => s.studentId === req.user!.userId);
+    if (!isTeacher && !isStudent) return res.status(403).json({ error: '无权访问' });
 
-    // 获取所有记录
-    const records = await prisma.classPerformanceRecord.findMany({
-      where: { classId },
-    });
+    const records = await prisma.classPerformanceRecord.findMany({ where: { classId } });
 
-    // 按学生汇总
-    const summary = students.map(s => {
-      const studentRecords = records.filter(r => r.studentId === s.studentId);
-      const qaRecords = studentRecords.filter(r => r.type === 'CLASSROOM_QA');
-      const shareRecords = studentRecords.filter(r => r.type === 'KNOWLEDGE_SHARE');
-
-      const qaAvgScore = qaRecords.length > 0
-        ? qaRecords.reduce((sum, r) => sum + (r.score || 0), 0) / qaRecords.length
-        : 0;
-      const shareAvgScore = shareRecords.length > 0
-        ? shareRecords.reduce((sum, r) => sum + (r.score || 0), 0) / shareRecords.length
-        : 0;
-
+    const summary = classWithStudents.students.map((s) => {
+      const studentRecords = records.filter((r) => r.studentId === s.studentId);
+      const qa = studentRecords.filter((r) => r.type === 'CLASSROOM_QA');
+      const share = studentRecords.filter((r) => r.type === 'KNOWLEDGE_SHARE');
+      const qaAvg = qa.length > 0 ? qa.reduce((sum, r) => sum + (r.score || 0), 0) / qa.length : 0;
+      const shareAvg = share.length > 0 ? share.reduce((sum, r) => sum + (r.score || 0), 0) / share.length : 0;
       return {
         student: s.student,
-        qaCount: qaRecords.length,
-        qaAvgScore: Math.round(qaAvgScore * 10) / 10,
-        shareCount: shareRecords.length,
-        shareAvgScore: Math.round(shareAvgScore * 10) / 10,
+        qaCount: qa.length,
+        qaAvgScore: Math.round(qaAvg * 10) / 10,
+        shareCount: share.length,
+        shareAvgScore: Math.round(shareAvg * 10) / 10,
         totalRecords: studentRecords.length,
-        // 默认权重: 课堂问答40% + 知识分享30% + 平均30%
-        compositeScore: Math.round((qaAvgScore * 0.4 + shareAvgScore * 0.3) * 20 * 10) / 10,
+        compositeScore: Math.round((qaAvg * 0.5 + shareAvg * 0.5) * 10) / 10,
       };
     });
 
     res.json({ summary });
   } catch (error) {
-    console.error('获取统计汇总失败:', error);
-    res.status(500).json({ error: '获取统计汇总失败' });
+    console.error('获取平时表现汇总失败:', error);
+    res.status(500).json({ error: '获取平时表现汇总失败' });
   }
 });
 
-// 导出平时表现记录
 router.get('/export/:classId', authenticate, requireTeacher, async (req, res) => {
   try {
     const { classId } = req.params;
-    const format = (req.query.format as string) || 'csv';
+    const format = String(req.query.format || 'csv');
 
-    const classData = await prisma.class.findUnique({
-      where: { id: classId },
-    });
-
-    if (!classData) {
-      return res.status(404).json({ error: '班级不存在' });
-    }
-
-    if (classData.teacherId !== req.user!.userId) {
-      return res.status(403).json({ error: '无权导出该班级数据' });
-    }
+    const permission = await ensureClassPermission(classId, req.user!.userId, 'teacher');
+    if (!permission.ok) return res.status(permission.code).json({ error: permission.error });
 
     const records = await prisma.classPerformanceRecord.findMany({
       where: { classId },
-      include: {
-        student: { select: { id: true, name: true, email: true } },
-      },
-      orderBy: [{ studentId: 'asc' }, { occurredAt: 'desc' }],
+      include: { student: { select: { id: true, name: true, email: true } }, recordedBy: { select: { id: true, name: true } } },
+      orderBy: { occurredAt: 'desc' },
     });
 
-    if (format === 'csv') {
-      const csvHeaders = ['学号', '姓名', '邮箱', '类型', '主题', '得分', '备注', '发生时间'] as const;
-      const typeMap: Record<string, string> = {
-        CLASSROOM_QA: '课堂问答',
-        KNOWLEDGE_SHARE: '知识分享',
-      };
-      const csvContent = [
-        csvHeaders.join(','),
-        ...records.map(r => [
-          `"${r.student.id.slice(0, 8)}"`,
-          `"${r.student.name}"`,
-          `"${r.student.email}"`,
-          `"${typeMap[r.type] || r.type}"`,
-          `"${r.topic || '-'}"`,
-          `"${r.score ?? '-'}"`,
-          `"${r.notes || '-'}"`,
-          `"${r.occurredAt.toISOString()}"`,
-        ].join(',')),
-      ].join('\n');
+    if (format === 'json') return res.json({ records });
 
-      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-      res.setHeader('Content-Disposition', `attachment; filename="平时表现_${classData.name}.csv"`);
-      res.send('\uFEFF' + csvContent);
-    } else {
-      res.json({ records });
-    }
+    const headers = ['学生姓名', '邮箱', '类型', '主题', '分数', '时长(分钟)', '备注', '记录时间', '记录人'];
+    const rows = records.map((r) => [r.student.name, r.student.email, r.type, r.topic || '', r.score ?? '', r.duration ?? '', r.notes || '', r.occurredAt.toLocaleString('zh-CN'), r.recordedBy?.name || '']);
+    const csv = [headers.join(','), ...rows.map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="class-performance-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.send(`\uFEFF${csv}`);
   } catch (error) {
-    console.error('导出记录失败:', error);
-    res.status(500).json({ error: '导出记录失败' });
+    console.error('导出失败:', error);
+    res.status(500).json({ error: '导出失败' });
   }
 });
 
-// ========== 知识点自评 ==========
-
-// 教师发布知识点清单
 router.post('/knowledge-points', authenticate, requireTeacher, async (req, res) => {
   try {
     const schema = z.object({
       classId: z.string().min(1),
-      points: z.array(z.object({
-        title: z.string().min(1).max(100),
-        description: z.string().max(500).optional(),
-      })).min(1, '请至少添加一个知识点'),
+      points: z.array(z.object({ title: z.string().min(1).max(100), description: z.string().max(500).optional() })).min(1),
     });
     const { classId, points } = schema.parse(req.body);
 
-    const classData = await prisma.class.findUnique({ where: { id: classId } });
-    if (!classData) {
-      return res.status(404).json({ error: '班级不存在' });
-    }
-    if (classData.teacherId !== req.user!.userId) {
-      return res.status(403).json({ error: '无权操作该班级' });
-    }
+    const permission = await ensureClassPermission(classId, req.user!.userId, 'teacher');
+    if (!permission.ok) return res.status(permission.code).json({ error: permission.error });
 
-    const created = [];
-    for (let i = 0; i < points.length; i++) {
-      const kp = await prisma.knowledgePoint.create({
-        data: {
-          classId,
-          title: points[i].title,
-          description: points[i].description,
-          orderIndex: i,
-        },
-      });
-      created.push(kp);
-    }
-
+    const created = await prisma.$transaction(points.map((p, i) => prisma.knowledgePoint.create({ data: { classId, title: p.title, description: p.description, orderIndex: i } })));
     res.status(201).json({ message: '知识点清单发布成功', knowledgePoints: created });
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      return res.status(400).json({ error: error.errors[0].message });
-    }
+    if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors[0].message });
     console.error('发布知识点失败:', error);
     res.status(500).json({ error: '发布知识点失败' });
   }
 });
 
-// 获取知识点清单
 router.get('/knowledge-points/:classId', authenticate, async (req, res) => {
   try {
     const { classId } = req.params;
-
-    const points = await prisma.knowledgePoint.findMany({
-      where: { classId },
-      include: {
-        _count: { select: { assessments: true } },
-      },
-      orderBy: { orderIndex: 'asc' },
-    });
-
+    const points = await prisma.knowledgePoint.findMany({ where: { classId }, include: { _count: { select: { assessments: true } } }, orderBy: { orderIndex: 'asc' } });
     res.json({ knowledgePoints: points });
   } catch (error) {
     console.error('获取知识点清单失败:', error);
@@ -303,66 +207,35 @@ router.get('/knowledge-points/:classId', authenticate, async (req, res) => {
   }
 });
 
-// 学生提交知识点自评
 router.post('/knowledge-assessment', authenticate, requireStudent, async (req, res) => {
   try {
     const schema = z.object({
-      assessments: z.array(z.object({
-        knowledgePointId: z.string().min(1),
-        masteryLevel: z.number().int().min(1).max(5),
-        selfNote: z.string().max(500).optional(),
-      })).min(1),
+      assessments: z.array(z.object({ knowledgePointId: z.string().min(1), masteryLevel: z.number().int().min(1).max(5), selfNote: z.string().max(500).optional() })).min(1),
     });
     const { assessments } = schema.parse(req.body);
 
-    const results = [];
-    for (const a of assessments) {
-      const result = await prisma.knowledgePointAssessment.upsert({
-        where: {
-          knowledgePointId_studentId: {
-            knowledgePointId: a.knowledgePointId,
-            studentId: req.user!.userId,
-          },
-        },
-        update: {
-          masteryLevel: a.masteryLevel,
-          selfNote: a.selfNote,
-        },
-        create: {
-          knowledgePointId: a.knowledgePointId,
-          studentId: req.user!.userId,
-          masteryLevel: a.masteryLevel,
-          selfNote: a.selfNote,
-        },
-      });
-      results.push(result);
-    }
+    const results = await prisma.$transaction(
+      assessments.map((a) =>
+        prisma.knowledgePointAssessment.upsert({
+          where: { knowledgePointId_studentId: { knowledgePointId: a.knowledgePointId, studentId: req.user!.userId } },
+          update: { masteryLevel: a.masteryLevel, selfNote: a.selfNote },
+          create: { knowledgePointId: a.knowledgePointId, studentId: req.user!.userId, masteryLevel: a.masteryLevel, selfNote: a.selfNote },
+        })
+      )
+    );
 
     res.json({ message: '知识点自评提交成功', assessments: results });
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      return res.status(400).json({ error: error.errors[0].message });
-    }
+    if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors[0].message });
     console.error('提交知识点自评失败:', error);
     res.status(500).json({ error: '提交知识点自评失败' });
   }
 });
 
-// 获取学生的知识点自评
 router.get('/knowledge-assessment/:classId', authenticate, async (req, res) => {
   try {
     const { classId } = req.params;
-
-    const knowledgePoints = await prisma.knowledgePoint.findMany({
-      where: { classId },
-      include: {
-        assessments: {
-          where: { studentId: req.user!.userId },
-        },
-      },
-      orderBy: { orderIndex: 'asc' },
-    });
-
+    const knowledgePoints = await prisma.knowledgePoint.findMany({ where: { classId }, include: { assessments: { where: { studentId: req.user!.userId } } }, orderBy: { orderIndex: 'asc' } });
     res.json({ knowledgePoints });
   } catch (error) {
     console.error('获取知识点自评失败:', error);
@@ -370,62 +243,30 @@ router.get('/knowledge-assessment/:classId', authenticate, async (req, res) => {
   }
 });
 
-// 教师查看知识点自评分布
 router.get('/knowledge-distribution/:classId', authenticate, requireTeacher, async (req, res) => {
   try {
     const { classId } = req.params;
+    const permission = await ensureClassPermission(classId, req.user!.userId, 'teacher');
+    if (!permission.ok) return res.status(permission.code).json({ error: permission.error });
 
-    const classData = await prisma.class.findUnique({ where: { id: classId } });
-    if (!classData) {
-      return res.status(404).json({ error: '班级不存在' });
-    }
-    if (classData.teacherId !== req.user!.userId) {
-      return res.status(403).json({ error: '无权查看该班级数据' });
-    }
-
-    const knowledgePoints = await prisma.knowledgePoint.findMany({
+    const points = await prisma.knowledgePoint.findMany({
       where: { classId },
-      include: {
-        assessments: {
-          include: {
-            student: { select: { id: true, name: true, email: true } },
-          },
-        },
-      },
+      include: { assessments: { include: { student: { select: { id: true, name: true, email: true } } } } },
       orderBy: { orderIndex: 'asc' },
     });
 
-    // 计算分布
-    const distribution = knowledgePoints.map(kp => {
-      const levels = [0, 0, 0, 0, 0]; // 1-5级人数
-      for (const a of kp.assessments) {
-        if (a.masteryLevel >= 1 && a.masteryLevel <= 5) {
-          levels[a.masteryLevel - 1]++;
-        }
-      }
-      const avgLevel = kp.assessments.length > 0
-        ? kp.assessments.reduce((sum, a) => sum + a.masteryLevel, 0) / kp.assessments.length
-        : 0;
-
+    const distribution = points.map((kp) => {
+      const levels = [0, 0, 0, 0, 0];
+      for (const a of kp.assessments) levels[a.masteryLevel - 1] += 1;
+      const avg = kp.assessments.length > 0 ? kp.assessments.reduce((sum, a) => sum + a.masteryLevel, 0) / kp.assessments.length : 0;
       return {
         id: kp.id,
         title: kp.title,
         description: kp.description,
         totalAssessments: kp.assessments.length,
-        averageLevel: Math.round(avgLevel * 10) / 10,
-        levelDistribution: {
-          level1: levels[0],
-          level2: levels[1],
-          level3: levels[2],
-          level4: levels[3],
-          level5: levels[4],
-        },
-        // 个体数据
-        assessments: kp.assessments.map(a => ({
-          student: a.student,
-          masteryLevel: a.masteryLevel,
-          selfNote: a.selfNote,
-        })),
+        averageLevel: Math.round(avg * 10) / 10,
+        levelDistribution: { level1: levels[0], level2: levels[1], level3: levels[2], level4: levels[3], level5: levels[4] },
+        assessments: kp.assessments.map((a) => ({ student: a.student, masteryLevel: a.masteryLevel, selfNote: a.selfNote })),
       };
     });
 
@@ -433,6 +274,24 @@ router.get('/knowledge-distribution/:classId', authenticate, requireTeacher, asy
   } catch (error) {
     console.error('获取知识点分布失败:', error);
     res.status(500).json({ error: '获取知识点分布失败' });
+  }
+});
+
+router.get('/knowledge-radar/:classId', authenticate, requireTeacher, async (req, res) => {
+  try {
+    const { classId } = req.params;
+    const permission = await ensureClassPermission(classId, req.user!.userId, 'teacher');
+    if (!permission.ok) return res.status(permission.code).json({ error: permission.error });
+
+    const points = await prisma.knowledgePoint.findMany({ where: { classId }, include: { assessments: true }, orderBy: { orderIndex: 'asc' } });
+    const radar = points.map((kp) => {
+      const avg = kp.assessments.length > 0 ? kp.assessments.reduce((sum, a) => sum + a.masteryLevel, 0) / kp.assessments.length : 0;
+      return { subject: kp.title, value: Math.round((avg / 5) * 100), fullMark: 100 };
+    });
+    res.json({ radar });
+  } catch (error) {
+    console.error('获取知识点雷达失败:', error);
+    res.status(500).json({ error: '获取知识点雷达失败' });
   }
 });
 
