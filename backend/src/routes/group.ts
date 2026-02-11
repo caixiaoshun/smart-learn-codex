@@ -38,10 +38,142 @@ router.get('/homework/:homeworkId', authenticate, async (req, res) => {
       orderBy: { createdAt: 'asc' },
     });
 
-    res.json({ groups });
+    const classStudents = await prisma.classStudent.findMany({
+      where: { classId: homework.classId },
+      include: {
+        student: { select: { id: true, name: true, email: true, avatar: true } },
+      },
+      orderBy: { student: { name: 'asc' } },
+    });
+
+    const assignedStudentIds = new Set(
+      groups.flatMap((group) => group.members.map((member) => member.studentId))
+    );
+
+    const unassignedStudents = classStudents
+      .map((entry) => entry.student)
+      .filter((student) => !assignedStudentIds.has(student.id));
+
+    const groupConfig = homework.groupConfig ? JSON.parse(homework.groupConfig) : {};
+
+    res.json({ groups, unassignedStudents, groupConfig });
   } catch (error) {
     console.error('获取小组列表失败:', error);
     res.status(500).json({ error: '获取小组列表失败' });
+  }
+});
+
+// 教师自动分组
+router.post('/homework/:homeworkId/auto-assign', authenticate, requireTeacher, async (req, res) => {
+  try {
+    const { homeworkId } = req.params;
+    const schema = z.object({
+      preferredSize: z.number().int().min(2).max(10).optional(),
+    });
+    const { preferredSize } = schema.parse(req.body || {});
+
+    const homework = await prisma.homework.findUnique({
+      where: { id: homeworkId },
+      include: { class: true },
+    });
+
+    if (!homework) {
+      return res.status(404).json({ error: '作业不存在' });
+    }
+
+    if (homework.class.teacherId !== req.user!.userId) {
+      return res.status(403).json({ error: '无权操作此作业' });
+    }
+
+    if (homework.type !== 'GROUP_PROJECT') {
+      return res.status(400).json({ error: '此作业不是项目小组作业' });
+    }
+
+    const groupConfig = homework.groupConfig ? JSON.parse(homework.groupConfig) : {};
+    const minSize = Number(groupConfig.minSize) || 2;
+    const maxSize = Number(groupConfig.maxSize) || 6;
+    const targetSize = Math.min(maxSize, Math.max(minSize, preferredSize || maxSize));
+
+    const classStudents = await prisma.classStudent.findMany({
+      where: { classId: homework.classId },
+      select: {
+        student: { select: { id: true, name: true, email: true, avatar: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const existingGroups = await prisma.assignmentGroup.findMany({
+      where: { homeworkId },
+      include: { members: true },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const assignedStudentIds = new Set(
+      existingGroups.flatMap((group) => group.members.map((member) => member.studentId))
+    );
+    const unassignedStudents = classStudents
+      .map((entry) => entry.student)
+      .filter((student) => !assignedStudentIds.has(student.id));
+
+    if (unassignedStudents.length === 0) {
+      return res.json({ message: '所有学生均已分组', assignedCount: 0 });
+    }
+
+    let groupCursor = 0;
+    const groupsToUse = [...existingGroups];
+    for (const student of unassignedStudents) {
+      let chosenGroup = groupsToUse[groupCursor];
+      if (!chosenGroup || chosenGroup.members.length >= targetSize) {
+        const groupIndex = groupsToUse.length + 1;
+        chosenGroup = await prisma.assignmentGroup.create({
+          data: {
+            homeworkId,
+            name: `第${groupIndex}组`,
+            leaderId: student.id,
+            members: {
+              create: {
+                studentId: student.id,
+                role: 'LEADER',
+              },
+            },
+          },
+          include: { members: true },
+        });
+        groupsToUse.push(chosenGroup);
+        groupCursor = groupsToUse.length - 1;
+        continue;
+      }
+
+      await prisma.assignmentGroupMember.create({
+        data: {
+          groupId: chosenGroup.id,
+          studentId: student.id,
+          role: 'MEMBER',
+        },
+      });
+      chosenGroup.members.push({
+        id: '',
+        groupId: chosenGroup.id,
+        studentId: student.id,
+        role: 'MEMBER',
+        joinedAt: new Date(),
+      });
+
+      if (chosenGroup.members.length >= targetSize) {
+        groupCursor += 1;
+      }
+    }
+
+    res.json({
+      message: `自动分组完成，已分配 ${unassignedStudents.length} 名学生`,
+      assignedCount: unassignedStudents.length,
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: error.errors[0].message });
+    }
+    console.error('自动分组失败:', error);
+    res.status(500).json({ error: '自动分组失败' });
   }
 });
 

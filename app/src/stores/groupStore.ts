@@ -5,6 +5,8 @@ import type { AssignmentGroup, LaborDivisionItem, ScoreAdjustment } from '@/type
 
 interface GroupState {
   groups: AssignmentGroup[];
+  unassignedStudents: Array<{ id: string; name: string; email: string; avatar?: string }>;
+  groupConfig: { minSize?: number; maxSize?: number } | null;
   isLoading: boolean;
 
   fetchGroups: (homeworkId: string) => Promise<void>;
@@ -13,19 +15,22 @@ interface GroupState {
   leaveGroup: (groupId: string) => Promise<void>;
   lockGroup: (groupId: string) => Promise<void>;
   assignStudent: (groupId: string, studentId: string) => Promise<void>;
+  autoAssignStudents: (homeworkId: string, preferredSize?: number) => Promise<void>;
   submitGroupWork: (groupId: string, homeworkId: string, files: string[], laborDivision: LaborDivisionItem[]) => Promise<void>;
   adjustScores: (submissionId: string, adjustments: Omit<ScoreAdjustment, 'id' | 'submissionId'>[]) => Promise<void>;
 }
 
 export const useGroupStore = create<GroupState>((set, get) => ({
   groups: [],
+  unassignedStudents: [],
+  groupConfig: null,
   isLoading: false,
 
   fetchGroups: async (homeworkId) => {
     set({ isLoading: true });
     try {
       const { data } = await api.get(`/groups/homework/${homeworkId}`);
-      set({ groups: data.groups });
+      set({ groups: data.groups, unassignedStudents: data.unassignedStudents || [], groupConfig: data.groupConfig || null });
     } finally {
       set({ isLoading: false });
     }
@@ -55,6 +60,12 @@ export const useGroupStore = create<GroupState>((set, get) => ({
   assignStudent: async (groupId, studentId) => {
     await api.post(`/groups/${groupId}/assign`, { studentId });
     toast.success('指派成功');
+  },
+
+  autoAssignStudents: async (homeworkId, preferredSize) => {
+    await api.post(`/groups/homework/${homeworkId}/auto-assign`, { preferredSize });
+    toast.success('自动分组完成');
+    await get().fetchGroups(homeworkId);
   },
 
   submitGroupWork: async (groupId, homeworkId, files, laborDivision) => {
